@@ -188,7 +188,7 @@ class SimpleBaselineDataset(Dataset):
 
         # Convert theme string to one-hot encoding
         themes = [0.0 for _ in THEME_SET]
-        puzzle_themes = self.puzzles.iloc[idx, 4].split()  # Assuming themes are in column 4
+        puzzle_themes = self.puzzles.iloc[idx, 7].split(" ")
         for theme in puzzle_themes:
             if theme in THEME2IDX:
                 themes[THEME2IDX[theme]] = 1.0
@@ -333,7 +333,7 @@ class IEEEDataset(Dataset):
 
         # Convert theme string to one-hot encoding
         themes = [0.0 for _ in THEME_SET]
-        puzzle_themes = self.puzzles.iloc[idx, 4].split() if not pd.isna(self.puzzles.iloc[idx, 4]) else []
+        puzzle_themes = self.puzzles.iloc[idx, 7].split() if not pd.isna(self.puzzles.iloc[idx, 7]) else []
         for theme in puzzle_themes:
             if theme in THEME2IDX:
                 themes[THEME2IDX[theme]] = 1.0
