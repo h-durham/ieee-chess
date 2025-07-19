@@ -17,7 +17,7 @@ if __name__ == "__main__":
             with open("raw_datasets/lichess_db_puzzle.csv", "wb") as output_file:
                 dctx.copy_stream(compressed_file, output_file)
 
-    for CLEANED in [True, False]:
+    for CLEANED in [False]:
         df = pd.read_csv("raw_datasets/lichess_db_puzzle.csv")
 
         # drop rows with RatingDeviation over 90

@@ -186,22 +186,12 @@ class SimpleBaselineDataset(Dataset):
         else:
             tenth_board = torch.zeros_like(first_board)
 
-        themes = [0 for _ in THEME_SET]
-
-        soft_bucket_probs = [0.0 for _ in BUCKET_MEANS]
-        target_bucket = get_bucket_idx(rating)
-        if target_bucket == 0:
-            soft_bucket_probs[0] = 0.80
-            soft_bucket_probs[1] = 0.15
-            soft_bucket_probs[2] = 0.05
-        elif target_bucket == len(soft_bucket_probs) - 1:
-            soft_bucket_probs[-1] = 0.80
-            soft_bucket_probs[-2] = 0.15
-            soft_bucket_probs[-3] = 0.05
-        else:
-            soft_bucket_probs[target_bucket - 1] = 0.1
-            soft_bucket_probs[target_bucket] = 0.8
-            soft_bucket_probs[target_bucket + 1] = 0.1
+        # Convert theme string to one-hot encoding
+        themes = [0.0 for _ in THEME_SET]
+        puzzle_themes = self.puzzles.iloc[idx, 4].split()  # Assuming themes are in column 4
+        for theme in puzzle_themes:
+            if theme in THEME2IDX:
+                themes[THEME2IDX[theme]] = 1.0
 
         moves_bucket = get_move_bucket(len(moves))
 
@@ -224,10 +214,10 @@ class SimpleBaselineDataset(Dataset):
             len(moves) >= 8,
             len(moves) >= 9,
             len(moves) >= 10,
-            torch.LongTensor(themes),
+            torch.tensor(themes, dtype=torch.float32),
             torch.tensor(moves_bucket, dtype=torch.int64),
-            torch.tensor(soft_bucket_probs, dtype=torch.float32),
-            torch.tensor(rating, dtype=torch.float32),
+            None,  # Placeholder for compatibility
+            None,  # Placeholder for compatibility
         )
 
 
@@ -341,7 +331,12 @@ class IEEEDataset(Dataset):
         else:
             tenth_board = torch.zeros_like(first_board)
 
-        themes = [0 for _ in THEME_SET]
+        # Convert theme string to one-hot encoding
+        themes = [0.0 for _ in THEME_SET]
+        puzzle_themes = self.puzzles.iloc[idx, 4].split() if not pd.isna(self.puzzles.iloc[idx, 4]) else []
+        for theme in puzzle_themes:
+            if theme in THEME2IDX:
+                themes[THEME2IDX[theme]] = 1.0
 
         moves_bucket = get_move_bucket(len(moves))
 
@@ -364,8 +359,8 @@ class IEEEDataset(Dataset):
             len(moves) >= 8,
             len(moves) >= 9,
             len(moves) >= 10,
-            torch.LongTensor(themes),
+            torch.tensor(themes, dtype=torch.float32),
             torch.tensor(moves_bucket, dtype=torch.int64),
-            False,  # torch.tensor(soft_bucket_probs, dtype=torch.float32),
-            False,  # torch.tensor(rating, dtype=torch.float32),
+            None,  # Placeholder for compatibility
+            None,  # Placeholder for compatibility
         )

@@ -1,4 +1,6 @@
 import torch
+from sklearn.metrics import hamming_loss, precision_recall_fscore_support, roc_auc_score
+import numpy as np
 from torch.utils.data import DataLoader
 from scheduler import InverseSquareRootSchedule
 
@@ -42,7 +44,7 @@ class SimpleBaseline(torch.nn.Module):
         self.fc3 = torch.nn.Linear(DIM, 1024)
         self.fc4 = torch.nn.Linear(1024, 1024)
         self.fc5 = torch.nn.Linear(1024, 512)
-        self.output = torch.nn.Linear(512, 1)
+        self.output = torch.nn.Linear(512, len(THEME_SET))
         self.dropoutrnn = torch.nn.Dropout(0.2)
         self.dropout1 = torch.nn.Dropout(0.15)
 
@@ -179,6 +181,7 @@ class SimpleBaseline(torch.nn.Module):
         x = self.fc5(x)
         x = torch.nn.functional.relu(x)
         x = self.output(x)
+        x = torch.sigmoid(x)  # Sigmoid activation for multi-label classification
         return x
 
     def serialize(self, path):
@@ -201,10 +204,9 @@ class SimpleBaseline(torch.nn.Module):
 
 
 def evaluate(model, eval_data, device=torch.device(0)):
-    valid_loss = torch.nn.MSELoss(reduction="sum")
     model.eval()
-
-    tot_loss = 0.0
+    all_preds = []
+    all_targets = []
     for (
         first_board,
         second_board,
@@ -302,8 +304,8 @@ def evaluate(model, eval_data, device=torch.device(0)):
             num_moves,
         )
 
-        loss = valid_loss(pred.reshape(-1), ratings.reshape(-1))
-        tot_loss += loss.item()
+        all_preds.append(pred.cpu().detach().numpy())
+        all_targets.append(themes.cpu().numpy())
         del (
             first_board,
             second_board,
@@ -329,7 +331,28 @@ def evaluate(model, eval_data, device=torch.device(0)):
             # rating_buckets,
         )
     model.train()
-    return tot_loss / len(eval_data.dataset)
+    # Concatenate all predictions and targets
+    all_preds = np.vstack(all_preds)
+    all_targets = np.vstack(all_targets)
+    
+    # Calculate metrics
+    h_loss = hamming_loss(all_targets, all_preds > 0.5)
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        all_targets, all_preds > 0.5, average='micro'
+    )
+    try:
+        auc = roc_auc_score(all_targets, all_preds, average='micro')
+    except ValueError:
+        auc = 0.0  # Handle case where a class has no positive samples
+        
+    metrics = {
+        'hamming_loss': h_loss,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'auc': auc
+    }
+    return metrics
 
 
 def simple_train_loop(
@@ -342,8 +365,8 @@ def simple_train_loop(
     experiment_name="experiment",
 ):
     tot_loss = 0.0
-    BEST_LOSS = 100000000000000000000.0
-    mse_loss_fn = torch.nn.MSELoss()
+    BEST_F1 = 0.0  # Higher F1 is better
+    bce_loss_fn = torch.nn.BCELoss()
     train_dataloader = DataLoader(
         train_dataset, batch_size=128, shuffle=True, num_workers=4
     )
@@ -363,11 +386,17 @@ def simple_train_loop(
         logger.info(f"EPOCH {epoch}")
         if epoch != 0:
             logger.info("EVALUATE")
-            valid_loss = evaluate(model, valid_dataloader, device=device)
-            logger.info(f"VALID LOSS: {valid_loss}")
-            if valid_loss < BEST_LOSS:
-                logger.info(f"NEW BEST LOSS. SERIALIZING.")
-                BEST_LOSS = valid_loss
+            metrics = evaluate(model, valid_dataloader, device=device)
+            logger.info(f"Validation Metrics:")
+            logger.info(f"Hamming Loss: {metrics['hamming_loss']:.4f}")
+            logger.info(f"Precision: {metrics['precision']:.4f}")
+            logger.info(f"Recall: {metrics['recall']:.4f}")
+            logger.info(f"F1: {metrics['f1']:.4f}")
+            logger.info(f"AUC: {metrics['auc']:.4f}")
+            
+            if metrics['f1'] > BEST_F1:
+                logger.info(f"NEW BEST F1 SCORE. SERIALIZING.")
+                BEST_F1 = metrics['f1']
                 model.serialize(
                     f"experiment_models/{experiment_name}/{experiment_name}.best.ckpt"
                 )
@@ -442,8 +471,8 @@ def simple_train_loop(
             )
             num_moves = num_moves.to(device)
             themes = themes.to(device)
-            # rating_buckets = rating_buckets.to(device)
-            ratings = ratings.to(device)
+            # These are placeholders in the dataset, we don't use them
+            _, _ = _None, ratings
             pred = model(
                 (
                     first_board,
@@ -470,23 +499,37 @@ def simple_train_loop(
                 themes,
                 num_moves,
             )
-            mse_loss = mse_loss_fn(pred.reshape(-1), ratings.reshape(-1))
+            bce_loss = bce_loss_fn(pred, themes)
 
-            mse_loss.backward()
+            bce_loss.backward()
             optimizer.step()
             scheduler.step()
-            tot_loss += mse_loss.item()
+            tot_loss += bce_loss.item()
             if idx > 0 and idx % 100 == 0:
                 if idx % 1000 == 0:
-                    logger.info(pred.reshape(-1))
-                    logger.info(ratings.reshape(-1))
-                    logger.info(f"mse_loss: {mse_loss.item()}")
+                    # Log predictions and actual labels for a few examples
+                    pred_sample = pred[:5].cpu().detach().numpy()
+                    themes_sample = themes[:5].cpu().numpy()
+                    logger.info("Sample predictions:")
+                    for i in range(min(5, len(pred_sample))):
+                        pred_themes = [THEME_SET[j] for j, p in enumerate(pred_sample[i]) if p > 0.5]
+                        actual_themes = [THEME_SET[j] for j, t in enumerate(themes_sample[i]) if t > 0]
+                        logger.info(f"Example {i}:")
+                        logger.info(f"  Predicted: {pred_themes}")
+                        logger.info(f"  Actual: {actual_themes}")
+                    logger.info(f"BCE Loss: {bce_loss.item():.4f}")
                 if idx % 2000 == 0:
-                    valid_loss = evaluate(model, valid_dataloader, device=device)
-                    logger.info(f"VALID LOSS: {valid_loss}")
-                    if valid_loss < BEST_LOSS:
-                        logger.info(f"NEW BEST LOSS. SERIALIZING.")
-                        BEST_LOSS = valid_loss
+                    metrics = evaluate(model, valid_dataloader, device=device)
+                    logger.info(f"Validation Metrics:")
+                    logger.info(f"Hamming Loss: {metrics['hamming_loss']:.4f}")
+                    logger.info(f"Precision: {metrics['precision']:.4f}")
+                    logger.info(f"Recall: {metrics['recall']:.4f}")
+                    logger.info(f"F1: {metrics['f1']:.4f}")
+                    logger.info(f"AUC: {metrics['auc']:.4f}")
+                    
+                    if metrics['f1'] > BEST_F1:
+                        logger.info(f"NEW BEST F1 SCORE. SERIALIZING.")
+                        BEST_F1 = metrics['f1']
                         model.serialize(
                             f"experiment_models/{experiment_name}/{experiment_name}.best.ckpt"
                         )
